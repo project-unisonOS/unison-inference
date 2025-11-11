@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, Body, HTTPException
+from fastapi import FastAPI, Request, Body, HTTPException, Depends
 import uvicorn
 import os
 import logging
@@ -6,11 +6,20 @@ import json
 import time
 from typing import Any, Dict, List, Optional
 from unison_common.logging import configure_logging, log_json
+from unison_common.tracing_middleware import TracingMiddleware
+from unison_common.tracing import get_tracer, initialize_tracing, instrument_fastapi, instrument_httpx
+from unison_common.consent import require_consent, ConsentScopes
 from collections import defaultdict
 
 app = FastAPI(title="unison-inference")
+app.add_middleware(TracingMiddleware, service_name="unison-inference")
 
 logger = configure_logging("unison-inference")
+
+# P0.3: Initialize tracing and instrument FastAPI/httpx
+initialize_tracing()
+instrument_fastapi(app)
+instrument_httpx()
 
 # Simple in-memory metrics
 _metrics = defaultdict(int)
@@ -27,6 +36,10 @@ AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-pre
 DEFAULT_PROVIDER = os.getenv("UNISON_INFERENCE_PROVIDER", "ollama")  # openai, ollama, azure
 DEFAULT_MODEL = os.getenv("UNISON_INFERENCE_MODEL", "llama3.2")
 
+# Feature flag: require consent enforcement
+REQUIRE_CONSENT = os.getenv("UNISON_REQUIRE_CONSENT", "false").lower() == "true"
+
+@app.get("/healthz")
 @app.get("/health")
 def health(request: Request):
     _metrics["/health"] += 1
@@ -52,6 +65,7 @@ def metrics():
     ])
     return "\n".join(lines)
 
+@app.get("/readyz")
 @app.get("/ready")
 def ready(request: Request):
     event_id = request.headers.get("X-Event-ID")
@@ -76,7 +90,11 @@ def ready(request: Request):
     return {"ready": ready, "provider": {"name": DEFAULT_PROVIDER, "ready": provider_ready}}
 
 @app.post("/inference/request")
-def inference_request(request: Request, body: Dict[str, Any] = Body(...)):
+def inference_request(
+    request: Request,
+    body: Dict[str, Any] = Body(...),
+    consent=Depends(require_consent([ConsentScopes.REPLAY_READ])) if REQUIRE_CONSENT else None,
+):
     """
     Handle inference requests as intents.
     Expected body: {
@@ -142,6 +160,10 @@ def _call_openai(model: str, prompt: str, max_tokens: int, temperature: float) -
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
     }
+    # Inject tracing headers
+    tracer = get_tracer()
+    if tracer:
+        headers = tracer.inject_headers(headers)
     data = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
@@ -157,6 +179,11 @@ def _call_openai(model: str, prompt: str, max_tokens: int, temperature: float) -
 def _call_ollama(model: str, prompt: str, max_tokens: int, temperature: float) -> str:
     """Call Ollama API."""
     import httpx
+    # Inject tracing headers
+    headers: Dict[str, str] = {}
+    tracer = get_tracer()
+    if tracer:
+        headers = tracer.inject_headers(headers)
     data = {
         "model": model,
         "prompt": prompt,
@@ -166,7 +193,7 @@ def _call_ollama(model: str, prompt: str, max_tokens: int, temperature: float) -
         }
     }
     with httpx.Client(timeout=60.0) as client:
-        resp = client.post(f"{OLLAMA_BASE_URL}/api/generate", json=data)
+        resp = client.post(f"{OLLAMA_BASE_URL}/api/generate", json=data, headers=headers)
     resp.raise_for_status()
     result = resp.json()
     return result.get("response", "")
@@ -178,6 +205,10 @@ def _call_azure_openai(model: str, prompt: str, max_tokens: int, temperature: fl
         "api-key": AZURE_OPENAI_API_KEY,
         "Content-Type": "application/json"
     }
+    # Inject tracing headers
+    tracer = get_tracer()
+    if tracer:
+        headers = tracer.inject_headers(headers)
     data = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
