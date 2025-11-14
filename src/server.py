@@ -1,6 +1,5 @@
 from fastapi import FastAPI, Request, Body, HTTPException, Depends
 import uvicorn
-import os
 import logging
 import json
 import time
@@ -10,6 +9,11 @@ from unison_common.tracing_middleware import TracingMiddleware
 from unison_common.tracing import get_tracer, initialize_tracing, instrument_fastapi, instrument_httpx
 from unison_common.consent import require_consent, ConsentScopes
 from collections import defaultdict
+
+try:
+    from .settings import InferenceServiceSettings
+except ImportError:  # pragma: no cover - fallback for direct script execution
+    from settings import InferenceServiceSettings  # type: ignore
 
 app = FastAPI(title="unison-inference")
 app.add_middleware(TracingMiddleware, service_name="unison-inference")
@@ -25,19 +29,14 @@ instrument_httpx()
 _metrics = defaultdict(int)
 _start_time = time.time()
 
-# Provider configuration
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
-OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://ollama:11434")
-AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
-AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
-AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-02-15-preview")
 
-DEFAULT_PROVIDER = os.getenv("UNISON_INFERENCE_PROVIDER", "ollama")  # openai, ollama, azure
-DEFAULT_MODEL = os.getenv("UNISON_INFERENCE_MODEL", "llama3.2")
+def load_settings() -> InferenceServiceSettings:
+    settings = InferenceServiceSettings.from_env()
+    globals()["SETTINGS"] = settings
+    return settings
 
-# Feature flag: require consent enforcement
-REQUIRE_CONSENT = os.getenv("UNISON_REQUIRE_CONSENT", "false").lower() == "true"
+
+SETTINGS = load_settings()
 
 @app.get("/healthz")
 @app.get("/health")
@@ -71,29 +70,31 @@ def ready(request: Request):
     event_id = request.headers.get("X-Event-ID")
     # Check provider availability
     provider_ready = False
-    if DEFAULT_PROVIDER == "ollama":
+    provider = SETTINGS.default_provider
+    if provider == "ollama":
         # Simple check if Ollama is reachable
         try:
             import httpx
             with httpx.Client(timeout=2.0) as client:
-                r = client.get(f"{OLLAMA_BASE_URL}/api/tags")
+                r = client.get(f"{SETTINGS.ollama.base_url}/api/tags")
             provider_ready = r.status_code == 200
         except Exception:
             provider_ready = False
-    elif DEFAULT_PROVIDER == "openai":
-        provider_ready = bool(OPENAI_API_KEY)
-    elif DEFAULT_PROVIDER == "azure":
-        provider_ready = bool(AZURE_OPENAI_ENDPOINT and AZURE_OPENAI_API_KEY)
+    elif provider == "openai":
+        provider_ready = bool(SETTINGS.openai.api_key)
+    elif provider == "azure":
+        azure = SETTINGS.azure
+        provider_ready = bool(azure.endpoint and azure.api_key)
     
     ready = provider_ready
-    log_json(logging.INFO, "ready", service="unison-inference", event_id=event_id, provider=DEFAULT_PROVIDER, ready=ready)
-    return {"ready": ready, "provider": {"name": DEFAULT_PROVIDER, "ready": provider_ready}}
+    log_json(logging.INFO, "ready", service="unison-inference", event_id=event_id, provider=provider, ready=ready)
+    return {"ready": ready, "provider": {"name": provider, "ready": provider_ready}}
 
 @app.post("/inference/request")
 def inference_request(
     request: Request,
     body: Dict[str, Any] = Body(...),
-    consent=Depends(require_consent([ConsentScopes.REPLAY_READ])) if REQUIRE_CONSENT else None,
+    consent=Depends(require_consent([ConsentScopes.REPLAY_READ])) if SETTINGS.require_consent else None,
 ):
     """
     Handle inference requests as intents.
@@ -112,8 +113,8 @@ def inference_request(
     
     intent = body.get("intent")
     prompt = body.get("prompt")
-    provider = body.get("provider", DEFAULT_PROVIDER)
-    model = body.get("model", DEFAULT_MODEL)
+    provider = body.get("provider", SETTINGS.default_provider)
+    model = body.get("model", SETTINGS.default_model)
     max_tokens = body.get("max_tokens", 1000)
     temperature = body.get("temperature", 0.7)
     
@@ -156,8 +157,9 @@ def _call_provider(provider: str, model: str, prompt: str, max_tokens: int, temp
 def _call_openai(model: str, prompt: str, max_tokens: int, temperature: float) -> str:
     """Call OpenAI API."""
     import httpx
+    openai_settings = SETTINGS.openai
     headers = {
-        "Authorization": f"Bearer {OPENAI_API_KEY}",
+        "Authorization": f"Bearer {openai_settings.api_key}",
         "Content-Type": "application/json"
     }
     # Inject tracing headers
@@ -171,7 +173,7 @@ def _call_openai(model: str, prompt: str, max_tokens: int, temperature: float) -
         "temperature": temperature
     }
     with httpx.Client(timeout=30.0) as client:
-        resp = client.post(f"{OPENAI_BASE_URL}/chat/completions", json=data, headers=headers)
+        resp = client.post(f"{openai_settings.base_url}/chat/completions", json=data, headers=headers)
     resp.raise_for_status()
     result = resp.json()
     return result["choices"][0]["message"]["content"]
@@ -193,7 +195,7 @@ def _call_ollama(model: str, prompt: str, max_tokens: int, temperature: float) -
         }
     }
     with httpx.Client(timeout=60.0) as client:
-        resp = client.post(f"{OLLAMA_BASE_URL}/api/generate", json=data, headers=headers)
+        resp = client.post(f"{SETTINGS.ollama.base_url}/api/generate", json=data, headers=headers)
     resp.raise_for_status()
     result = resp.json()
     return result.get("response", "")
@@ -201,8 +203,9 @@ def _call_ollama(model: str, prompt: str, max_tokens: int, temperature: float) -
 def _call_azure_openai(model: str, prompt: str, max_tokens: int, temperature: float) -> str:
     """Call Azure OpenAI API."""
     import httpx
+    azure_settings = SETTINGS.azure
     headers = {
-        "api-key": AZURE_OPENAI_API_KEY,
+        "api-key": azure_settings.api_key,
         "Content-Type": "application/json"
     }
     # Inject tracing headers
@@ -215,7 +218,7 @@ def _call_azure_openai(model: str, prompt: str, max_tokens: int, temperature: fl
         "max_tokens": max_tokens,
         "temperature": temperature
     }
-    url = f"{AZURE_OPENAI_ENDPOINT}/openai/deployments/{model}/chat/completions?api-version={AZURE_OPENAI_API_VERSION}"
+    url = f"{azure_settings.endpoint}/openai/deployments/{model}/chat/completions?api-version={azure_settings.api_version}"
     with httpx.Client(timeout=30.0) as client:
         resp = client.post(url, json=data, headers=headers)
     resp.raise_for_status()

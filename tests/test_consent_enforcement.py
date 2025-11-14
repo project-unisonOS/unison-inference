@@ -34,6 +34,9 @@ def test_inference_consent_enforced(monkeypatch):
     consent_app = make_consent_app()
     consent_transport = httpx.ASGITransport(app=consent_app)
 
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+    from server import app as inference_app
+
     orig_async_client = httpx.AsyncClient
 
     def _patched_async_client(*args, **kwargs):
@@ -41,9 +44,6 @@ def test_inference_consent_enforced(monkeypatch):
         return orig_async_client(*args, **kwargs)
 
     monkeypatch.setattr(httpx, "AsyncClient", _patched_async_client)
-
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-    from server import app as inference_app
     client = TestClient(inference_app)
 
     payload = {
