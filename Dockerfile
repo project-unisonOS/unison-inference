@@ -2,19 +2,18 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Copy requirements first for better caching
-COPY unison-inference/requirements.txt ./requirements.txt
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir redis python-jose[cryptography] bleach httpx pyyaml
+RUN apt-get update && apt-get install -y --no-install-recommends curl git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Copy service source and shared library from monorepo
-COPY unison-inference/src ./src/
-COPY unison-common/src/unison_common ./src/unison_common
+COPY constraints.txt ./constraints.txt
+COPY unison-common /app/unison-common
+COPY unison-inference/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir -c ./constraints.txt /app/unison-common \
+    && pip install --no-cache-dir -c ./constraints.txt -r requirements.txt
+
+COPY unison-inference/src ./src
+COPY unison-inference/tests ./tests
 
 ENV PYTHONPATH=/app/src
-
-# Expose port
 EXPOSE 8087
-
-# Run the service
 CMD ["python", "src/server.py"]

@@ -35,7 +35,10 @@ def test_inference_consent_enforced(monkeypatch):
     consent_transport = httpx.ASGITransport(app=consent_app)
 
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-    from server import app as inference_app
+    import importlib
+    import server as server_module
+    server_module = importlib.reload(server_module)
+    inference_app = server_module.app
 
     orig_async_client = httpx.AsyncClient
 

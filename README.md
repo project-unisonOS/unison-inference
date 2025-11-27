@@ -2,6 +2,9 @@
 
 External inference service for Unison, providing LLM integration with multiple providers.
 
+## Status
+Core service (active) — inference gateway used by orchestrator and devstack (`8087`).
+
 ## Features
 
 - **Multi-provider support**: OpenAI, Ollama (local), Azure OpenAI
@@ -30,13 +33,27 @@ External inference service for Unison, providing LLM integration with multiple p
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `UNISON_INFERENCE_PROVIDER` | `ollama` | Default provider (openai/ollama/azure) |
-| `UNISON_INFERENCE_MODEL` | `llama3.2` | Default model name |
+| `UNISON_INFERENCE_MODEL` | `qwen2.5` | Default model name (text-first) |
+| `UNISON_INFERENCE_MODEL_MULTIMODAL` | `qwen2.5` | Preferred on-device multimodal/vision model |
+| `UNISON_INFERENCE_MODEL_TEXT` | `qwen2.5` | Preferred on-device text model |
+| `UNISON_ALLOW_CLOUD_FALLBACK` | `false` | Allow policy-gated fallback to cloud |
+| `UNISON_FALLBACK_PROVIDER` | - | Cloud provider to use when falling back |
+| `UNISON_FALLBACK_MODEL` | - | Cloud model name to use when falling back |
 | `OPENAI_API_KEY` | - | OpenAI API key |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI base URL |
 | `OLLAMA_BASE_URL` | `http://ollama:11434` | Ollama API URL |
 | `AZURE_OPENAI_ENDPOINT` | - | Azure OpenAI endpoint |
 | `AZURE_OPENAI_API_KEY` | - | Azure OpenAI API key |
 | `AZURE_OPENAI_API_VERSION` | `2024-02-15-preview` | Azure API version |
+
+Copy `.env.example` to `.env` and set provider secrets before running.
+
+## Testing
+```bash
+python3 -m venv .venv && . .venv/bin/activate
+pip install -c ../constraints.txt -r requirements.txt
+PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 OTEL_SDK_DISABLED=true python -m pytest
+```
 
 ## API Endpoints
 
