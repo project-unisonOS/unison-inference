@@ -58,6 +58,8 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 OTEL_SDK_DISABLED=true python -m pytest
 ## Docs
 
 Full docs at https://project-unisonos.github.io
+- Repo roles: `unison-docs/dev/unison-repo-roles.md`
+- Release/branching: `unison-docs/dev/release-and-branching.md`
 
 ## API Endpoints
 
