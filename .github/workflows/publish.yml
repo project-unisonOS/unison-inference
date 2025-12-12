@@ -16,5 +16,5 @@ jobs:
     with:
       image_name: unison-inference
       domain: inference
-      service_port: "8080"
+      service_port: "8087"
     secrets: inherit
