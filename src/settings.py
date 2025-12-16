@@ -34,9 +34,10 @@ class OllamaSettings:
 @dataclass(frozen=True)
 class InferenceServiceSettings:
     default_provider: str = "ollama"
-    default_model: str = "qwen2.5"
-    on_device_multimodal_model: str = "qwen2.5"
-    on_device_text_model: str = "qwen2.5"
+    # Default to a small Qwen variant that runs on CPU-only dev machines (WSL) without OOM.
+    default_model: str = "qwen2.5:1.5b"
+    on_device_multimodal_model: str = "qwen2.5:1.5b"
+    on_device_text_model: str = "qwen2.5:1.5b"
     allow_cloud_fallback: bool = False
     fallback_provider: Optional[str] = None
     fallback_model: Optional[str] = None
@@ -49,9 +50,10 @@ class InferenceServiceSettings:
     def from_env(cls) -> "InferenceServiceSettings":
         return cls(
             default_provider=os.getenv("UNISON_INFERENCE_PROVIDER", "ollama"),
-            default_model=os.getenv("UNISON_INFERENCE_MODEL", "llama3.2"),
-            on_device_multimodal_model=os.getenv("UNISON_INFERENCE_MODEL_MULTIMODAL", "llama3.2-vision"),
-            on_device_text_model=os.getenv("UNISON_INFERENCE_MODEL_TEXT", "llama3.2"),
+            # Phase 1.1 default: Qwen local model, not Llama.
+            default_model=os.getenv("UNISON_INFERENCE_MODEL", "qwen2.5:1.5b"),
+            on_device_multimodal_model=os.getenv("UNISON_INFERENCE_MODEL_MULTIMODAL", "qwen2.5:1.5b"),
+            on_device_text_model=os.getenv("UNISON_INFERENCE_MODEL_TEXT", "qwen2.5:1.5b"),
             allow_cloud_fallback=_as_bool(os.getenv("UNISON_ALLOW_CLOUD_FALLBACK"), False),
             fallback_provider=os.getenv("UNISON_FALLBACK_PROVIDER"),
             fallback_model=os.getenv("UNISON_FALLBACK_MODEL"),

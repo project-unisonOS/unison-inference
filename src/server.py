@@ -3,6 +3,7 @@ import uvicorn
 import logging
 import json
 import time
+import os
 from typing import Any, Dict, List, Optional, Tuple
 from unison_common.logging import configure_logging, log_json
 from unison_common.tracing_middleware import TracingMiddleware
@@ -359,6 +360,7 @@ def _call_ollama(
     """Call Ollama chat API with optional tool schema."""
     import httpx
 
+    timeout_s = float(os.getenv("UNISON_OLLAMA_TIMEOUT_S", "300"))
     headers: Dict[str, str] = {}
     tracer = get_tracer()
     if tracer:
@@ -372,7 +374,7 @@ def _call_ollama(
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = tool_choice
-    with httpx.Client(timeout=60.0) as client:
+    with httpx.Client(timeout=timeout_s) as client:
         resp = client.post(f"{SETTINGS.ollama.base_url}/api/chat", json=payload, headers=headers)
     resp.raise_for_status()
     result = resp.json()
