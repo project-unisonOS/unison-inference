@@ -60,7 +60,11 @@ def test_inference_consent_enforced(monkeypatch):
     r_forbidden = client.post("/inference/request", json=payload, headers={"Authorization": "Bearer none"})
     assert r_forbidden.status_code == 403
 
-    # Valid read -> 200
+    # Valid read passes consent. A missing local provider is an expected 503.
     r_ok = client.post("/inference/request", json=payload, headers={"Authorization": "Bearer valid-read"})
-    # Provider may not be available; we just assert it isn't 403 because consent passed.
-    assert r_ok.status_code in (200, 500)
+    assert r_ok.status_code in (200, 503)
+
+    # Restore the module-level route dependency so this reload cannot leak the
+    # consent-enabled app into tests collected from other modules.
+    monkeypatch.delenv("UNISON_REQUIRE_CONSENT", raising=False)
+    importlib.reload(server_module)

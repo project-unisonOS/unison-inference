@@ -14,6 +14,10 @@ try:
 except Exception:
     BatonMiddleware = None
 from collections import defaultdict
+try:
+    from .disclosure import enforce_disclosure
+except ImportError:  # pragma: no cover
+    from disclosure import enforce_disclosure  # type: ignore
 
 try:
     from .settings import InferenceServiceSettings
@@ -193,6 +197,15 @@ def inference_request(
             detail=ready_detail,
         )
         raise HTTPException(status_code=503, detail=f"Provider not ready: {ready_detail}")
+
+    try:
+        body = enforce_disclosure(provider, body)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    prompt = body.get("prompt")
+    messages = body.get("messages")
+    attachments = body.get("attachments", [])
+    tools = body.get("tools") or []
 
     normalized_messages = _normalize_messages(prompt, messages)
     normalized_messages = _attach_media_to_messages(normalized_messages, attachments)
@@ -435,4 +448,6 @@ def _call_azure_openai(
     }
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8087)
+    # Container entrypoint must listen on its network namespace; publishing and
+    # host exposure remain controlled by the deployment runtime.
+    uvicorn.run(app, host="0.0.0.0", port=8087)  # nosec B104

@@ -67,6 +67,11 @@ def test_inference_fallback_provider_when_not_ready(monkeypatch):
             "allow_fallback": True,
             "fallback_provider": "openai",
             "fallback_model": "gpt-4o-mini",
+            "local_alternative_checked": True,
+            "trust_decision": {
+                "outcome": "minimize",
+                "disclosed_fields": ["intent", "messages"],
+            },
         },
     )
 
