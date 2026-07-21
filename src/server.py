@@ -448,4 +448,6 @@ def _call_azure_openai(
     }
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8087)
+    # Container entrypoint must listen on its network namespace; publishing and
+    # host exposure remain controlled by the deployment runtime.
+    uvicorn.run(app, host="0.0.0.0", port=8087)  # nosec B104
