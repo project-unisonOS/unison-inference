@@ -9,7 +9,7 @@ def test_remote_provider_fails_closed_without_decision():
 
 
 def test_remote_provider_receives_only_minimized_fields_and_no_secrets():
-    result = enforce_disclosure("openai", {"intent": "summarize", "prompt": "ok", "attachments": ["secret"], "secrets": {"token": "x"}, "trust_decision": {"outcome": "minimize", "disclosed_fields": ["intent", "prompt"]}})
+    result = enforce_disclosure("openai", {"intent": "summarize", "prompt": "ok", "attachments": ["secret"], "secrets": {"token": "x"}, "local_alternative_checked": True, "trust_decision": {"outcome": "minimize", "disclosed_fields": ["intent", "prompt"]}})
     assert result["prompt"] == "ok"
     assert "attachments" not in result and "secrets" not in result
 

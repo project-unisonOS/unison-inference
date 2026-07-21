@@ -11,6 +11,8 @@ PERMITTED_OUTCOMES = {"allow", "minimize", "redact"}
 def enforce_disclosure(provider: str, body: dict[str, Any]) -> dict[str, Any]:
     if provider in LOCAL_PROVIDERS:
         return body
+    if body.get("local_alternative_checked") is not True:
+        raise PermissionError("remote inference requires a recorded local-alternative check")
     decision = body.get("trust_decision")
     if not isinstance(decision, dict) or decision.get("outcome") not in PERMITTED_OUTCOMES:
         raise PermissionError("remote inference requires an allowing disclosure decision")
