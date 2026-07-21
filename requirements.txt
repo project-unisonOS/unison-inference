@@ -1,6 +1,7 @@
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
 httpx==0.27.2
-pydantic==2.5.0
+pydantic==2.12.4
 
 # unison-common package (local install)
+git+https://github.com/project-unisonOS/unison-common.git@52d4b3dfdd71f15d8169b70e1dec05dc8a0c6f30
