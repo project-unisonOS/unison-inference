@@ -1,6 +1,6 @@
 import pytest
 
-from src.disclosure import enforce_disclosure, treat_tool_output_as_untrusted
+from disclosure import enforce_disclosure, treat_tool_output_as_untrusted
 
 
 def test_remote_provider_fails_closed_without_decision():
