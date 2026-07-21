@@ -20,7 +20,7 @@ def test_inference_settings_defaults(monkeypatch):
     settings = InferenceServiceSettings.from_env()
 
     assert settings.default_provider == "ollama"
-    assert settings.default_model == "llama3.2"
+    assert settings.default_model == "qwen2.5:1.5b"
     assert settings.require_consent is False
     assert settings.openai.base_url == "https://api.openai.com/v1"
     assert settings.azure.api_version == "2024-02-15-preview"

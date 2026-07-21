@@ -1,0 +1,14 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python-security:
+    uses: project-unisonOS/.github/.github/workflows/reusable-python-security.yml@45118ffb52ee397cf7a510767154ee5b3705a850
+    with:
+      python-version: "3.12"
+      working-directory: "."
+      unison-common-ref: "571d5d521d6e534157e856f330371e0030379b07"
