@@ -16,8 +16,10 @@ except Exception:
 from collections import defaultdict
 try:
     from .disclosure import enforce_disclosure
+    from .routing import route_model
 except ImportError:  # pragma: no cover
     from disclosure import enforce_disclosure  # type: ignore
+    from routing import route_model  # type: ignore
 
 try:
     from .settings import InferenceServiceSettings
@@ -160,6 +162,20 @@ def inference_request(
     )
     provider = body.get("provider", SETTINGS.default_provider)
     model = body.get("model")
+    if isinstance(body.get("model_policy"), dict):
+        candidates = body.get("model_candidates")
+        if not isinstance(candidates, list) or not candidates:
+            raise HTTPException(status_code=400, detail="model_candidates are required with model_policy")
+        try:
+            selected = route_model(
+                candidates=candidates,
+                policy=body["model_policy"],
+                offline=body.get("offline") is True,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        provider = selected["provider"]
+        model = selected["model"]
     max_tokens = body.get("max_tokens", 1000)
     temperature = body.get("temperature", 0.7)
 
