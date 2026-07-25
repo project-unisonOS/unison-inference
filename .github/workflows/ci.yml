@@ -11,4 +11,4 @@ jobs:
     with:
       python-version: "3.12"
       working-directory: "."
-      unison-common-ref: "52d4b3dfdd71f15d8169b70e1dec05dc8a0c6f30"
+      unison-common-ref: "1e593c8280045e2dcf80413b84b3b47c5e2119ae"

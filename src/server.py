@@ -14,11 +14,14 @@ try:
 except Exception:
     BatonMiddleware = None
 from collections import defaultdict
+from unison_common import ModelSemanticProposal, ModelTaskRequirement
 try:
     from .disclosure import enforce_disclosure
+    from .governed_models import ModelProposalError, ModelRegistry, route_operation, validate_semantic_proposal
     from .routing import route_model
 except ImportError:  # pragma: no cover
     from disclosure import enforce_disclosure  # type: ignore
+    from governed_models import ModelProposalError, ModelRegistry, route_operation, validate_semantic_proposal  # type: ignore
     from routing import route_model  # type: ignore
 
 try:
@@ -41,6 +44,12 @@ instrument_httpx()
 # Simple in-memory metrics
 _metrics = defaultdict(int)
 _start_time = time.time()
+_GOVERNED_REGISTRY: ModelRegistry | None = None
+
+
+def configure_governed_registry(registry: ModelRegistry) -> None:
+    """Install a registry that was loaded and signature-verified by startup authority."""
+    globals()["_GOVERNED_REGISTRY"] = registry
 
 
 def _provider_ready_status(provider: str, model: Optional[str] = None) -> Tuple[bool, str]:
@@ -162,7 +171,26 @@ def inference_request(
     )
     provider = body.get("provider", SETTINGS.default_provider)
     model = body.get("model")
-    if isinstance(body.get("model_policy"), dict):
+    governed_requirement = None
+    governed_decision = None
+    if isinstance(body.get("task_requirement"), dict):
+        if _GOVERNED_REGISTRY is None:
+            raise HTTPException(status_code=503, detail="governed model registry is not configured")
+        governed_requirement = ModelTaskRequirement.model_validate(body["task_requirement"])
+        try:
+            governed_decision = route_operation(
+                operation_id=str(body.get("operation_id") or event_id or "inference"),
+                requirement=governed_requirement, registry=_GOVERNED_REGISTRY,
+                policy=body.get("model_policy") or {}, hardware=body.get("hardware") or {},
+                offline=body.get("offline") is True,
+            )
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        if governed_decision.selected_model_id is None:
+            raise HTTPException(status_code=503, detail=governed_decision.model_dump(mode="json"))
+        manifest = _GOVERNED_REGISTRY.manifests[f"{governed_decision.selected_model_id}@{governed_decision.selected_version}"]
+        provider, model = manifest.provider, manifest.model_id
+    elif isinstance(body.get("model_policy"), dict):
         candidates = body.get("model_candidates")
         if not isinstance(candidates, list) or not candidates:
             raise HTTPException(status_code=400, detail="model_candidates are required with model_policy")
@@ -264,7 +292,23 @@ def inference_request(
             "timestamp": time.time(),
             "fallback_used": fallback_used,
             "provider_ready": provider_ready,
+            "route_decision": governed_decision.model_dump(mode="json") if governed_decision else None,
         }
+        validation = body.get("semantic_validation")
+        if isinstance(validation, dict):
+            if governed_requirement is None:
+                raise HTTPException(status_code=400, detail="semantic_validation requires task_requirement")
+            try:
+                proposal = ModelSemanticProposal.model_validate_json(content)
+                response["semantic_contribution"] = validate_semantic_proposal(
+                    proposal=proposal, requirement=governed_requirement,
+                    deterministic_facts=validation.get("deterministic_facts") or {},
+                    current_source_versions=validation.get("current_source_versions") or {},
+                    allowed_recipients=set(validation.get("allowed_recipients") or []),
+                    deterministic_action_ids=set(validation.get("deterministic_action_ids") or []),
+                )
+            except (ValueError, ModelProposalError) as exc:
+                raise HTTPException(status_code=422, detail=f"unsafe model proposal: {exc}") from exc
         log_json(
             logging.INFO,
             "inference_success",
