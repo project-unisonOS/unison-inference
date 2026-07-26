@@ -46,6 +46,9 @@ class InferenceServiceSettings:
     model_registry_manifests_dir: Optional[str] = None
     model_registry_trusted_keys_dir: Optional[str] = None
     model_registry_inventory_file: Optional[str] = None
+    require_persistent_model_lifecycle: bool = False
+    model_lifecycle_state_file: Optional[str] = None
+    model_rollback_artifacts_dir: Optional[str] = None
     openai: OpenAISettings = field(default_factory=OpenAISettings)
     azure: AzureOpenAISettings = field(default_factory=AzureOpenAISettings)
     ollama: OllamaSettings = field(default_factory=OllamaSettings)
@@ -66,6 +69,11 @@ class InferenceServiceSettings:
             model_registry_manifests_dir=os.getenv("UNISON_MODEL_REGISTRY_MANIFESTS_DIR"),
             model_registry_trusted_keys_dir=os.getenv("UNISON_MODEL_REGISTRY_TRUSTED_KEYS_DIR"),
             model_registry_inventory_file=os.getenv("UNISON_MODEL_REGISTRY_INVENTORY_FILE"),
+            require_persistent_model_lifecycle=_as_bool(
+                os.getenv("UNISON_REQUIRE_PERSISTENT_MODEL_LIFECYCLE"), False
+            ),
+            model_lifecycle_state_file=os.getenv("UNISON_MODEL_LIFECYCLE_STATE_FILE"),
+            model_rollback_artifacts_dir=os.getenv("UNISON_MODEL_ROLLBACK_ARTIFACTS_DIR"),
             openai=OpenAISettings(
                 api_key=os.getenv("OPENAI_API_KEY"),
                 base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),

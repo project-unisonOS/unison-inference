@@ -21,11 +21,13 @@ try:
     from .governed_models import ModelProposalError, ModelRegistry, route_operation, validate_semantic_proposal
     from .routing import route_model
     from .registry_loader import ModelRegistryLoadError, load_production_registry
+    from .model_lifecycle import ModelLifecycleError, ModelLifecycleManager
 except ImportError:  # pragma: no cover
     from disclosure import enforce_disclosure  # type: ignore
     from governed_models import ModelProposalError, ModelRegistry, route_operation, validate_semantic_proposal  # type: ignore
     from routing import route_model  # type: ignore
     from registry_loader import ModelRegistryLoadError, load_production_registry  # type: ignore
+    from model_lifecycle import ModelLifecycleError, ModelLifecycleManager  # type: ignore
 
 try:
     from .settings import InferenceServiceSettings
@@ -48,6 +50,7 @@ instrument_httpx()
 _metrics = defaultdict(int)
 _start_time = time.time()
 _GOVERNED_REGISTRY: ModelRegistry | None = None
+_MODEL_LIFECYCLE: ModelLifecycleManager | None = None
 
 
 def configure_governed_registry(registry: ModelRegistry | None) -> None:
@@ -113,8 +116,28 @@ def configure_governed_registry_from_settings(settings: InferenceServiceSettings
     return registry
 
 
+def configure_model_lifecycle_from_settings(
+    settings: InferenceServiceSettings,
+) -> ModelLifecycleManager:
+    configured = (
+        settings.model_lifecycle_state_file,
+        settings.model_rollback_artifacts_dir,
+    )
+    if settings.require_persistent_model_lifecycle and not all(configured):
+        raise ModelLifecycleError("persistent model lifecycle is required but not fully configured")
+    manager = ModelLifecycleManager(
+        state_path=Path(settings.model_lifecycle_state_file)
+        if settings.model_lifecycle_state_file else None,
+        rollback_artifact_dir=Path(settings.model_rollback_artifacts_dir)
+        if settings.model_rollback_artifacts_dir else None,
+    )
+    globals()["_MODEL_LIFECYCLE"] = manager
+    return manager
+
+
 SETTINGS = load_settings()
 configure_governed_registry_from_settings(SETTINGS)
+configure_model_lifecycle_from_settings(SETTINGS)
 
 @app.get("/healthz")
 @app.get("/health")
@@ -168,6 +191,11 @@ def ready(request: Request):
             "required": SETTINGS.require_governed_registry,
             "ready": registry_ready,
             "manifest_count": len(_GOVERNED_REGISTRY.manifests) if _GOVERNED_REGISTRY else 0,
+        },
+        "model_lifecycle": {
+            "required": SETTINGS.require_persistent_model_lifecycle,
+            "persistent": bool(_MODEL_LIFECYCLE and _MODEL_LIFECYCLE.persistent),
+            "restored_task_count": len(_MODEL_LIFECYCLE.deployments) if _MODEL_LIFECYCLE else 0,
         },
         "on_device": {
             "multimodal_model": SETTINGS.on_device_multimodal_model,
