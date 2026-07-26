@@ -4,4 +4,4 @@ httpx==0.27.2
 pydantic==2.12.4
 
 # unison-common package (local install)
-git+https://github.com/project-unisonOS/unison-common.git@1e593c8280045e2dcf80413b84b3b47c5e2119ae
+git+https://github.com/project-unisonOS/unison-common.git@cea3558fd3d85b5a9a816093446b0bedfed70bef
