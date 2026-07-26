@@ -4,7 +4,11 @@ import hashlib
 import hmac
 import json
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from pathlib import Path
+from typing import Any, Protocol
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from unison_common import (
     ModelManifest, ModelRouteDecision, ModelSemanticProposal, ModelTaskRequirement,
@@ -18,6 +22,10 @@ class ModelRegistryError(ValueError):
 
 class ModelProposalError(ValueError):
     pass
+
+
+class ManifestVerifier(Protocol):
+    def verify(self, signed: SignedModelManifest) -> ModelManifest: ...
 
 
 def _canonical(manifest: ModelManifest) -> bytes:
@@ -36,6 +44,8 @@ class ModelManifestSigner:
         return SignedModelManifest(manifest=manifest, key_id=key_id, signature=signature)
 
     def verify(self, signed: SignedModelManifest) -> ModelManifest:
+        if signed.algorithm != "hmac-sha256":
+            raise ModelRegistryError("model manifest signature algorithm is not hmac-sha256")
         key = self._keys.get(signed.key_id)
         if key is None:
             raise ModelRegistryError("model manifest signer is not trusted")
@@ -45,9 +55,30 @@ class ModelManifestSigner:
         return signed.manifest
 
 
+class Ed25519ModelManifestVerifier:
+    """Verify release manifests without placing signing authority in the runtime."""
+
+    def __init__(self, keys: dict[str, Ed25519PublicKey]):
+        if not keys:
+            raise ValueError("at least one Ed25519 model manifest public key is required")
+        self._keys = dict(keys)
+
+    def verify(self, signed: SignedModelManifest) -> ModelManifest:
+        if signed.algorithm != "ed25519":
+            raise ModelRegistryError("production model manifests must use ed25519")
+        key = self._keys.get(signed.key_id)
+        if key is None:
+            raise ModelRegistryError("model manifest signer is not trusted")
+        try:
+            key.verify(bytes.fromhex(signed.signature), _canonical(signed.manifest))
+        except (InvalidSignature, ValueError) as exc:
+            raise ModelRegistryError("model manifest signature is invalid") from exc
+        return signed.manifest
+
+
 @dataclass
 class ModelRegistry:
-    signer: ModelManifestSigner
+    signer: ManifestVerifier
     manifests: dict[str, ModelManifest] = field(default_factory=dict)
     installed: dict[str, str] = field(default_factory=dict)
     remote_available: set[str] = field(default_factory=set)
@@ -63,6 +94,16 @@ class ModelRegistry:
 
     def inventory_installed(self, artifacts: dict[str, bytes]) -> None:
         self.installed = {key: "sha256:" + hashlib.sha256(value).hexdigest() for key, value in artifacts.items()}
+
+    def inventory_installed_files(self, artifacts: dict[str, Path]) -> None:
+        inventory: dict[str, str] = {}
+        for key, path in artifacts.items():
+            digest = hashlib.sha256()
+            with path.open("rb") as artifact:
+                for chunk in iter(lambda: artifact.read(1024 * 1024), b""):
+                    digest.update(chunk)
+            inventory[key] = "sha256:" + digest.hexdigest()
+        self.installed = inventory
 
     def inventory_remote(self, candidates: set[str]) -> None:
         self.remote_available = set(candidates)

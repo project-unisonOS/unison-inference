@@ -42,6 +42,10 @@ class InferenceServiceSettings:
     fallback_provider: Optional[str] = None
     fallback_model: Optional[str] = None
     require_consent: bool = False
+    require_governed_registry: bool = False
+    model_registry_manifests_dir: Optional[str] = None
+    model_registry_trusted_keys_dir: Optional[str] = None
+    model_registry_inventory_file: Optional[str] = None
     openai: OpenAISettings = field(default_factory=OpenAISettings)
     azure: AzureOpenAISettings = field(default_factory=AzureOpenAISettings)
     ollama: OllamaSettings = field(default_factory=OllamaSettings)
@@ -58,6 +62,10 @@ class InferenceServiceSettings:
             fallback_provider=os.getenv("UNISON_FALLBACK_PROVIDER"),
             fallback_model=os.getenv("UNISON_FALLBACK_MODEL"),
             require_consent=_as_bool(os.getenv("UNISON_REQUIRE_CONSENT"), False),
+            require_governed_registry=_as_bool(os.getenv("UNISON_REQUIRE_GOVERNED_REGISTRY"), False),
+            model_registry_manifests_dir=os.getenv("UNISON_MODEL_REGISTRY_MANIFESTS_DIR"),
+            model_registry_trusted_keys_dir=os.getenv("UNISON_MODEL_REGISTRY_TRUSTED_KEYS_DIR"),
+            model_registry_inventory_file=os.getenv("UNISON_MODEL_REGISTRY_INVENTORY_FILE"),
             openai=OpenAISettings(
                 api_key=os.getenv("OPENAI_API_KEY"),
                 base_url=os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1"),
