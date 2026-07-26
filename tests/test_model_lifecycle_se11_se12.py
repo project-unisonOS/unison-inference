@@ -1,4 +1,5 @@
 import copy
+import json
 
 import pytest
 
@@ -71,3 +72,73 @@ def test_synthetic_load_offline_update_and_rollback_do_not_claim_support():
     matrix = build_compatibility_matrix([record])
     assert matrix.supported_model_refs == []
     assert "No model" in matrix.truthful_notice
+
+
+def test_lifecycle_state_and_evaluations_restore_after_reboot(tmp_path):
+    state = tmp_path / "lifecycle/state.json"
+    manager = ModelLifecycleManager(state_path=state)
+    manager.establish("semantic", "stable@1", artifact_ref="release://stable-1")
+    manager.shadow(
+        task="semantic",
+        candidate_ref="candidate@2",
+        journeys=[JOURNEY],
+        runner=lambda *_: output(),
+        candidate_artifact_ref="release://candidate-2",
+    )
+    manager.begin_canary(task="semantic", candidate_ref="candidate@2")
+    manager.observe(task="semantic", health=ModelHealthSignal(
+        model_ref="candidate@2", sample_count=100, contract_success_rate=1,
+        semantic_success_rate=1, fallback_rate=0, error_rate=0, p95_latency_ms=100,
+    ))
+
+    restored = ModelLifecycleManager(state_path=state)
+
+    assert restored.deployments["semantic"].stage == "canary"
+    assert restored.deployments["semantic"].prior_model_ref == "stable@1"
+    assert restored.candidates["semantic"] == "candidate@2"
+    assert restored.evaluations["candidate@2"][0].passed is True
+    assert restored.health_signals["semantic"][0].contains_person_content is False
+    assert restored.model_artifacts == {
+        "candidate@2": "release://candidate-2", "stable@1": "release://stable-1",
+    }
+    assert state.stat().st_mode & 0o777 == 0o600
+
+
+def test_corrupt_or_unknown_lifecycle_state_fails_closed(tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text('{"schema_version":"model-lifecycle-state.v0"}')
+
+    with pytest.raises(ModelLifecycleError, match="schema"):
+        ModelLifecycleManager(state_path=state)
+
+    state.write_text("not-json")
+    with pytest.raises(ModelLifecycleError, match="invalid"):
+        ModelLifecycleManager(state_path=state)
+
+
+def test_automatic_rollback_writes_content_free_release_artifact(tmp_path):
+    state = tmp_path / "state.json"
+    artifacts = tmp_path / "rollback-artifacts"
+    manager = ModelLifecycleManager(state_path=state, rollback_artifact_dir=artifacts)
+    manager.establish("semantic", "stable@1", artifact_ref="release://stable-1")
+    manager.shadow(
+        task="semantic", candidate_ref="candidate@2", journeys=[JOURNEY],
+        runner=lambda *_: output(), candidate_artifact_ref="release://candidate-2",
+    )
+    manager.begin_canary(task="semantic", candidate_ref="candidate@2")
+
+    manager.observe(task="semantic", health=ModelHealthSignal(
+        model_ref="candidate@2", sample_count=100, contract_success_rate=.9,
+        semantic_success_rate=.9, fallback_rate=.1, error_rate=.1, p95_latency_ms=9000,
+    ))
+
+    [artifact_path] = list(artifacts.glob("*.json"))
+    artifact = json.loads(artifact_path.read_text())
+    assert artifact["schema_version"] == "model-rollback-artifact.v1"
+    assert artifact["contains_person_content"] is False
+    assert artifact["from_release_artifact"] == "release://candidate-2"
+    assert artifact["target_release_artifact"] == "release://stable-1"
+    assert artifact["action"] == {
+        "kind": "activate-retained-model", "model_ref": "stable@1",
+    }
+    assert ModelLifecycleManager(state_path=state).deployments["semantic"].stage == "rolled-back"

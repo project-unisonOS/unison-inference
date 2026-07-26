@@ -45,8 +45,57 @@ Core service (active) — inference gateway used by orchestrator and devstack (`
 | `AZURE_OPENAI_ENDPOINT` | - | Azure OpenAI endpoint |
 | `AZURE_OPENAI_API_KEY` | - | Azure OpenAI API key |
 | `AZURE_OPENAI_API_VERSION` | `2024-02-15-preview` | Azure API version |
+| `UNISON_REQUIRE_GOVERNED_REGISTRY` | `false` | Fail startup unless the production governed registry is configured |
+| `UNISON_MODEL_REGISTRY_MANIFESTS_DIR` | - | Directory of signed per-version model manifests |
+| `UNISON_MODEL_REGISTRY_TRUSTED_KEYS_DIR` | - | Directory of trusted Ed25519 public keys named `<key_id>.pem` |
+| `UNISON_MODEL_REGISTRY_INVENTORY_FILE` | - | Installed-artifact and remote-availability inventory |
+| `UNISON_REQUIRE_PERSISTENT_MODEL_LIFECYCLE` | `false` | Fail startup unless durable lifecycle state and rollback artifacts are configured |
+| `UNISON_MODEL_LIFECYCLE_STATE_FILE` | - | Atomic lifecycle journal restored during startup |
+| `UNISON_MODEL_ROLLBACK_ARTIFACTS_DIR` | - | Content-free automatic rollback artifacts for appliance update handling |
 
 Copy `.env.example` to `.env` and set provider secrets before running.
+
+### Governed production registry
+
+Production uses Ed25519-signed manifests so the inference runtime holds public
+verification keys but no manifest-signing authority. HMAC-SHA256 remains
+accepted by the contract and test signer for development compatibility; the
+production loader rejects it.
+
+Set all four governed-registry variables together. Startup fails closed when
+the registry is required but absent, partially configured, has an invalid
+public key or signature, references an unknown model, or contains an installed
+artifact whose SHA-256 digest differs from its signed manifest. The inventory
+has this strict shape; relative artifact paths resolve from the inventory file:
+
+```json
+{
+  "schema_version": "model-registry-inventory.v1",
+  "installed_artifacts": {
+    "local-small@1": "artifacts/local-small-1.bin"
+  },
+  "remote_available": ["approved-remote@3"]
+}
+```
+
+### Persistent model lifecycle
+
+Supported appliances persist active, candidate, prior, canary, and rolled-back
+deployment state in a canonical `model-lifecycle-state.v1` journal. Golden
+journey results, release artifact references, and a bounded history of
+content-free health signals are committed atomically with each transition and
+validated before restoration. A malformed, unknown, oversized, or symlinked
+journal fails startup closed.
+
+Automatic health-gate rollback also emits a canonical
+`model-rollback-artifact.v1` record. It identifies the retained target model and
+its release artifact without containing prompts, outputs, memories, person
+identifiers, or other person content. Release signing remains outside the
+inference runtime.
+
+Each manifest file is a `signed-model-manifest.v1` envelope. Public keys are
+PEM-encoded Ed25519 keys and the manifest signature is 128 lowercase hex
+characters over canonical JSON (`sort_keys=True`, compact separators).
 
 ## Testing
 ```bash

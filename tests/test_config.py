@@ -8,6 +8,13 @@ def test_inference_settings_defaults(monkeypatch):
         "UNISON_INFERENCE_PROVIDER",
         "UNISON_INFERENCE_MODEL",
         "UNISON_REQUIRE_CONSENT",
+        "UNISON_REQUIRE_GOVERNED_REGISTRY",
+        "UNISON_MODEL_REGISTRY_MANIFESTS_DIR",
+        "UNISON_MODEL_REGISTRY_TRUSTED_KEYS_DIR",
+        "UNISON_MODEL_REGISTRY_INVENTORY_FILE",
+        "UNISON_REQUIRE_PERSISTENT_MODEL_LIFECYCLE",
+        "UNISON_MODEL_LIFECYCLE_STATE_FILE",
+        "UNISON_MODEL_ROLLBACK_ARTIFACTS_DIR",
         "OPENAI_API_KEY",
         "OPENAI_BASE_URL",
         "AZURE_OPENAI_ENDPOINT",
@@ -22,6 +29,10 @@ def test_inference_settings_defaults(monkeypatch):
     assert settings.default_provider == "ollama"
     assert settings.default_model == "qwen2.5:1.5b"
     assert settings.require_consent is False
+    assert settings.require_governed_registry is False
+    assert settings.model_registry_manifests_dir is None
+    assert settings.require_persistent_model_lifecycle is False
+    assert settings.model_lifecycle_state_file is None
     assert settings.openai.base_url == "https://api.openai.com/v1"
     assert settings.azure.api_version == "2024-02-15-preview"
     assert settings.ollama.base_url == "http://ollama:11434"
@@ -32,6 +43,13 @@ def test_inference_settings_env_override(monkeypatch):
         "UNISON_INFERENCE_PROVIDER": "openai",
         "UNISON_INFERENCE_MODEL": "gpt-4o",
         "UNISON_REQUIRE_CONSENT": "TRUE",
+        "UNISON_REQUIRE_GOVERNED_REGISTRY": "TRUE",
+        "UNISON_MODEL_REGISTRY_MANIFESTS_DIR": "/registry/manifests",
+        "UNISON_MODEL_REGISTRY_TRUSTED_KEYS_DIR": "/registry/keys",
+        "UNISON_MODEL_REGISTRY_INVENTORY_FILE": "/registry/inventory.json",
+        "UNISON_REQUIRE_PERSISTENT_MODEL_LIFECYCLE": "TRUE",
+        "UNISON_MODEL_LIFECYCLE_STATE_FILE": "/state/model-lifecycle.json",
+        "UNISON_MODEL_ROLLBACK_ARTIFACTS_DIR": "/state/rollback-artifacts",
         "OPENAI_API_KEY": "test-key",
         "OPENAI_BASE_URL": "https://example.com/openai",
         "AZURE_OPENAI_ENDPOINT": "https://azure.example.com",
@@ -47,6 +65,13 @@ def test_inference_settings_env_override(monkeypatch):
     assert settings.default_provider == "openai"
     assert settings.default_model == "gpt-4o"
     assert settings.require_consent is True
+    assert settings.require_governed_registry is True
+    assert settings.model_registry_manifests_dir == "/registry/manifests"
+    assert settings.model_registry_trusted_keys_dir == "/registry/keys"
+    assert settings.model_registry_inventory_file == "/registry/inventory.json"
+    assert settings.require_persistent_model_lifecycle is True
+    assert settings.model_lifecycle_state_file == "/state/model-lifecycle.json"
+    assert settings.model_rollback_artifacts_dir == "/state/rollback-artifacts"
     assert settings.openai.api_key == "test-key"
     assert settings.openai.base_url == "https://example.com/openai"
     assert settings.azure.endpoint == "https://azure.example.com"
