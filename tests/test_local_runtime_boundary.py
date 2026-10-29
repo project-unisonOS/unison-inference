@@ -6,6 +6,7 @@ import server
 
 @pytest.mark.parametrize("name,digest,expected", [
     ("local-small", "sha256:" + "a" * 64, True),
+    ("local-small", "a" * 64, True),
     ("local-small:unreviewed", "sha256:" + "a" * 64, False),
     ("local-small", "sha256:" + "b" * 64, False),
     ("local-small", None, False),

@@ -77,6 +77,15 @@ def _local_ollama_url() -> str:
     return SETTINGS.ollama.base_url.rstrip("/")
 
 
+def _canonical_sha256(value):
+    if not isinstance(value, str):
+        return None
+    digest = value.removeprefix("sha256:")
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        return None
+    return "sha256:" + digest
+
+
 def _provider_ready_status(provider: str, model: Optional[str] = None, expected_digest: Optional[str] = None) -> Tuple[bool, str]:
     """Lightweight readiness check for configured provider/model."""
     if provider == "ollama":
@@ -92,7 +101,7 @@ def _provider_ready_status(provider: str, model: Optional[str] = None, expected_
                 matching = [m for m in tags if isinstance(m, dict) and m.get("name") == model]
                 if len(matching) != 1:
                     return False, f"model {model} not pulled"
-                if expected_digest is not None and matching[0].get("digest") != expected_digest:
+                if expected_digest is not None and _canonical_sha256(matching[0].get("digest")) != expected_digest:
                     return False, "runtime model digest differs from approved artifact"
             return True, "ok"
         except Exception as exc:
