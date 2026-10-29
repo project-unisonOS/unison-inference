@@ -1,5 +1,27 @@
 # unison-inference
 
+## October 2026 hardened ingress (draft)
+
+HTTP inference requires an authenticated person token with audience `inference`,
+explicit `inference.local` scope, active session introspection, a governed task
+requirement and a verified model registry. This initial route permits text-only,
+read-only, zero-provider-cost local Ollama inference. Remote providers, tools and
+attachments are rejected. Local outage cannot widen authority through a supplied
+fallback or trust dictionary. The provider adapters described below remain code
+assets, not enabled remote capabilities on this hardened ingress.
+
+Set `UNISON_MODEL_HARDWARE_FILE` to trusted JSON with `architecture`, `ram_mb`,
+`vram_mb`, `storage_mb` and optional `accelerator`. Request-body hardware/policy
+cannot replace this inventory or the local-only policy. Missing inventory makes
+hardware-dependent models ineligible. Token budget is bounded to 1..1024. The
+request route requires a registry even if startup was allowed without one.
+
+Independent remote disclosure, workload delegation, retrieval policy, actual
+model deployment and complete reference-monitor coverage remain release gates.
+No operational configuration or real credentials were changed. Evidence and
+limits: [authenticated local inference](docs/authenticated-local-inference.md).
+
+
 External inference service for Unison, providing LLM integration with multiple providers.
 
 ## Status

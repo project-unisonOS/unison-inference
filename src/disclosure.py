@@ -16,7 +16,7 @@ def enforce_disclosure(provider: str, body: dict[str, Any]) -> dict[str, Any]:
     decision = body.get("trust_decision")
     if not isinstance(decision, dict) or decision.get("outcome") not in PERMITTED_OUTCOMES:
         raise PermissionError("remote inference requires an allowing disclosure decision")
-    allowed = set(decision.get("disclosed_fields") or ("intent", "prompt", "messages", "attachments", "tools"))
+    allowed = set(decision.get("disclosed_fields") or ())
     sanitized = dict(body)
     for field in ("prompt", "messages", "attachments", "tools"):
         if field not in allowed:

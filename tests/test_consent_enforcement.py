@@ -60,9 +60,9 @@ def test_inference_consent_enforced(monkeypatch):
     r_forbidden = client.post("/inference/request", json=payload, headers={"Authorization": "Bearer none"})
     assert r_forbidden.status_code == 403
 
-    # Valid read passes consent. A missing local provider is an expected 503.
+    # A consent token is not an authenticated principal and cannot authorize inference.
     r_ok = client.post("/inference/request", json=payload, headers={"Authorization": "Bearer valid-read"})
-    assert r_ok.status_code in (200, 503)
+    assert r_ok.status_code == 403
 
     # Restore the module-level route dependency so this reload cannot leak the
     # consent-enabled app into tests collected from other modules.
