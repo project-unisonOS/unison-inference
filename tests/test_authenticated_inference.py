@@ -15,7 +15,7 @@ def controlled_model(monkeypatch):
     _, registry = registry_with_local()
     monkeypatch.setattr(server, "_GOVERNED_REGISTRY", registry)
     monkeypatch.setattr(server, "_provider_ready_status", lambda *a: (True, "synthetic"))
-    monkeypatch.setattr(server.app.state, "model_hardware", {"architecture": "x86_64", "ram_mb": 4096, "storage_mb": 1000}, raising=False)
+    monkeypatch.setitem(server.app.state._state, "model_hardware", {"architecture": "x86_64", "ram_mb": 4096, "storage_mb": 1000})
     calls = []
     def invoke(provider, model, messages, **kwargs):
         calls.append((provider, model, messages))
@@ -81,7 +81,7 @@ def test_local_scope_cannot_expand_capabilities(authenticated_inference, control
 
 def test_request_hardware_cannot_replace_trusted_inventory(authenticated_inference, controlled_model, monkeypatch):
     client, headers, _, _ = authenticated_inference
-    monkeypatch.setattr(server.app.state, "model_hardware", {})
+    monkeypatch.setitem(server.app.state._state, "model_hardware", {})
     response = client.post("/inference/request", json=payload(), headers=headers())
     assert response.status_code == 503
     assert controlled_model == []
