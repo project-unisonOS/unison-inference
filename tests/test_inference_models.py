@@ -17,7 +17,7 @@ def reset_settings(monkeypatch):
     yield
 
 
-def test_inference_prefers_multimodal_when_attachments(monkeypatch):
+def test_unauthenticated_multimodal_request_cannot_reach_provider(monkeypatch):
     captured = {}
 
     def fake_provider(provider, model, messages, **kwargs):
@@ -37,13 +37,11 @@ def test_inference_prefers_multimodal_when_attachments(monkeypatch):
         },
     )
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body.get("model") == server.SETTINGS.on_device_multimodal_model
-    assert captured["model"] == server.SETTINGS.on_device_multimodal_model
+    assert resp.status_code == 401
+    assert captured == {}
 
 
-def test_inference_fallback_provider_when_not_ready(monkeypatch):
+def test_unauthenticated_fallback_request_is_rejected(monkeypatch):
     calls = {"ready": []}
 
     def fake_ready(provider, model=None):
@@ -75,9 +73,5 @@ def test_inference_fallback_provider_when_not_ready(monkeypatch):
         },
     )
 
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body.get("provider") == "openai"
-    # Called readiness twice: initial (ollama default), fallback (openai)
-    assert calls["ready"][0][0] == server.SETTINGS.default_provider
-    assert calls["ready"][1][0] == "openai"
+    assert resp.status_code == 401
+    assert calls["ready"] == []

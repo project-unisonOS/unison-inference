@@ -4,6 +4,8 @@ import logging
 import json
 import time
 import os
+import ipaddress
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from unison_common.logging import configure_logging, log_json
@@ -16,6 +18,9 @@ except Exception:
     BatonMiddleware = None
 from collections import defaultdict
 from unison_common import ModelSemanticProposal, ModelTaskRequirement
+from unison_common.principal import PrincipalKind
+from unison_common.principal_middleware import PrincipalBindingMiddleware, get_bound_principal
+from pydantic import ValidationError
 try:
     from .disclosure import enforce_disclosure
     from .governed_models import ModelProposalError, ModelRegistry, route_operation, validate_semantic_proposal
@@ -35,6 +40,7 @@ except ImportError:  # pragma: no cover - fallback for direct script execution
     from settings import InferenceServiceSettings  # type: ignore
 
 app = FastAPI(title="unison-inference")
+app.add_middleware(PrincipalBindingMiddleware, service_name="inference")
 app.add_middleware(TracingMiddleware, service_name="unison-inference")
 if BatonMiddleware:
     app.add_middleware(BatonMiddleware)
@@ -58,22 +64,45 @@ def configure_governed_registry(registry: ModelRegistry | None) -> None:
     globals()["_GOVERNED_REGISTRY"] = registry
 
 
-def _provider_ready_status(provider: str, model: Optional[str] = None) -> Tuple[bool, str]:
+def _local_ollama_url() -> str:
+    url = urlsplit(SETTINGS.ollama.base_url)
+    try:
+        local = ipaddress.ip_address(url.hostname or "").is_loopback
+        port = url.port
+    except ValueError:
+        raise ValueError("literal loopback endpoint required") from None
+    if (url.scheme not in {"http", "https"} or not local or url.username or url.password
+            or url.path not in {"", "/"} or url.query or url.fragment or port == 0):
+        raise ValueError("literal loopback endpoint required")
+    return SETTINGS.ollama.base_url.rstrip("/")
+
+
+def _canonical_sha256(value):
+    if not isinstance(value, str):
+        return None
+    digest = value.removeprefix("sha256:")
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        return None
+    return "sha256:" + digest
+
+
+def _provider_ready_status(provider: str, model: Optional[str] = None, expected_digest: Optional[str] = None) -> Tuple[bool, str]:
     """Lightweight readiness check for configured provider/model."""
     if provider == "ollama":
         try:
             import httpx
-            with httpx.Client(timeout=2.0) as client:
-                r = client.get(f"{SETTINGS.ollama.base_url}/api/tags")
+            base_url = _local_ollama_url()
+            with httpx.Client(timeout=2.0, trust_env=False, follow_redirects=False) as client:
+                r = client.get(f"{base_url}/api/tags")
             if r.status_code != 200:
                 return False, "ollama unreachable"
             tags = r.json().get("models", []) if r.headers.get("content-type", "").startswith("application/json") else []
             if model:
-                models = [m.get("name") for m in tags if isinstance(m, dict)]
-                if model not in models and not any(
-                    str(model).startswith(str(m)) or str(m).startswith(str(model)) for m in models if m
-                ):
+                matching = [m for m in tags if isinstance(m, dict) and m.get("name") == model]
+                if len(matching) != 1:
                     return False, f"model {model} not pulled"
+                if expected_digest is not None and _canonical_sha256(matching[0].get("digest")) != expected_digest:
+                    return False, "runtime model digest differs from approved artifact"
             return True, "ok"
         except Exception as exc:
             return False, f"ollama error: {exc}"
@@ -136,6 +165,24 @@ def configure_model_lifecycle_from_settings(
 
 
 SETTINGS = load_settings()
+def load_hardware_inventory() -> dict[str, Any]:
+    name = os.getenv("UNISON_MODEL_HARDWARE_FILE")
+    if not name:
+        return {}  # No caller-controlled capacity fallback.
+    path = Path(name)
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+        raise ValueError("hardware inventory must be a small regular file")
+    inventory = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(inventory, dict) or set(inventory) - {"architecture", "ram_mb", "vram_mb", "storage_mb", "accelerator"}:
+        raise ValueError("invalid hardware inventory")
+    for field in ("ram_mb", "vram_mb", "storage_mb"):
+        value = inventory.get(field, 0)
+        if type(value) is not int or value < 0:
+            raise ValueError("invalid hardware capacity")
+    return inventory
+
+
+app.state.model_hardware = load_hardware_inventory()
 configure_governed_registry_from_settings(SETTINGS)
 configure_model_lifecycle_from_settings(SETTINGS)
 
@@ -173,7 +220,7 @@ def ready(request: Request):
     model = SETTINGS.default_model
     provider_ready, detail = _provider_ready_status(provider, model)
     registry_ready = _GOVERNED_REGISTRY is not None
-    ready = provider_ready and (registry_ready or not SETTINGS.require_governed_registry)
+    ready = provider_ready and registry_ready
     log_json(
         logging.INFO,
         "ready",
@@ -211,8 +258,39 @@ def inference_request(
 ):
     """
     Handle inference requests as intents.
-    Supports legacy prompt-only requests and new structured companion payloads with tools/attachments.
+    The initial hardened route permits scoped local read-only inference only.
     """
+    principal = get_bound_principal(request)
+    if principal.principal_kind != PrincipalKind.PERSON or "inference.local" not in principal.scopes:
+        raise HTTPException(status_code=403, detail="Explicit person-scoped local inference authority required")
+    try:
+        _local_ollama_url()
+    except ValueError:
+        raise HTTPException(status_code=503, detail="Local inference requires a literal loopback runtime endpoint") from None
+    if not isinstance(body.get("task_requirement"), dict):
+        raise HTTPException(status_code=400, detail="A governed task requirement is required")
+    if body.get("provider", "ollama") != "ollama":
+        raise HTTPException(status_code=403, detail="Remote inference requires independent disclosure authority")
+    if body.get("tools") or body.get("attachments"):
+        raise HTTPException(status_code=403, detail="Tools and attachments require separately verified capability authority")
+    if "prompt" in body and not isinstance(body["prompt"], str):
+        raise HTTPException(status_code=400, detail="Prompt must be text")
+    if "messages" in body:
+        messages = body["messages"]
+        if not isinstance(messages, list) or not messages:
+            raise HTTPException(status_code=400, detail="Messages must be a nonempty text conversation")
+        for message in messages:
+            if (not isinstance(message, dict)
+                    or set(message) != {"role", "content"}
+                    or message["role"] not in ("system", "user", "assistant")
+                    or not isinstance(message["content"], str)):
+                raise HTTPException(status_code=400, detail="Only role and text content are permitted in messages")
+    try:
+        token_limit = int(body.get("max_tokens", 1000))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid token budget") from None
+    if not 1 <= token_limit <= 1024:
+        raise HTTPException(status_code=400, detail="Token budget must be between 1 and 1024")
     _metrics["/inference/request"] += 1
     event_id = request.headers.get("X-Event-ID")
 
@@ -223,12 +301,6 @@ def inference_request(
     tools = body.get("tools") or []
     tool_choice = body.get("tool_choice", "auto")
     response_format = body.get("response_format", "text-and-tools")
-    allow_fallback_raw = body.get("allow_fallback", SETTINGS.allow_cloud_fallback)
-    allow_fallback = (
-        allow_fallback_raw
-        if isinstance(allow_fallback_raw, bool)
-        else str(allow_fallback_raw).lower() in {"1", "true", "yes", "on"}
-    )
     provider = body.get("provider", SETTINGS.default_provider)
     model = body.get("model")
     governed_requirement = None
@@ -236,12 +308,18 @@ def inference_request(
     if isinstance(body.get("task_requirement"), dict):
         if _GOVERNED_REGISTRY is None:
             raise HTTPException(status_code=503, detail="governed model registry is not configured")
-        governed_requirement = ModelTaskRequirement.model_validate(body["task_requirement"])
+        try:
+            governed_requirement = ModelTaskRequirement.model_validate(body["task_requirement"])
+        except ValidationError:
+            raise HTTPException(status_code=422, detail="Invalid governed task requirement") from None
+        # Local capability authority never grants remote disclosure or paid usage.
+        governed_requirement = governed_requirement.model_copy(update={"local_only": True, "max_cost": 0})
         try:
             governed_decision = route_operation(
                 operation_id=str(body.get("operation_id") or event_id or "inference"),
                 requirement=governed_requirement, registry=_GOVERNED_REGISTRY,
-                policy=body.get("model_policy") or {}, hardware=body.get("hardware") or {},
+                policy={"require_supported": True, "cost_ceiling": 0, "allowed_disclosure_fields": []},
+                hardware=getattr(app.state, "model_hardware", {}),
                 offline=body.get("offline") is True,
             )
         except PermissionError as exc:
@@ -250,21 +328,9 @@ def inference_request(
             raise HTTPException(status_code=503, detail=governed_decision.model_dump(mode="json"))
         manifest = _GOVERNED_REGISTRY.manifests[f"{governed_decision.selected_model_id}@{governed_decision.selected_version}"]
         provider, model = manifest.provider, manifest.model_id
-    elif isinstance(body.get("model_policy"), dict):
-        candidates = body.get("model_candidates")
-        if not isinstance(candidates, list) or not candidates:
-            raise HTTPException(status_code=400, detail="model_candidates are required with model_policy")
-        try:
-            selected = route_model(
-                candidates=candidates,
-                policy=body["model_policy"],
-                offline=body.get("offline") is True,
-            )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        provider = selected["provider"]
-        model = selected["model"]
-    max_tokens = body.get("max_tokens", 1000)
+        if provider != "ollama" or manifest.execution_location != "device":
+            raise HTTPException(status_code=403, detail="Remote inference requires independent disclosure authority")
+    max_tokens = token_limit
     temperature = body.get("temperature", 0.7)
 
     if not intent:
@@ -278,17 +344,10 @@ def inference_request(
             model = SETTINGS.on_device_multimodal_model
         else:
             model = SETTINGS.on_device_text_model or SETTINGS.default_model
-    provider_ready, ready_detail = _provider_ready_status(provider, model)
+    provider_ready, ready_detail = _provider_ready_status(provider, model, manifest.artifact_digest)
     fallback_used = False
-    if not provider_ready and allow_fallback:
-        fallback_provider = body.get("fallback_provider") or SETTINGS.fallback_provider
-        fallback_model = body.get("fallback_model") or SETTINGS.fallback_model
-        if fallback_provider:
-            provider = fallback_provider
-            model = fallback_model or model
-            provider_ready, ready_detail = _provider_ready_status(provider, model)
-            fallback_used = True
-
+    # Availability cannot expand the token's local-only authority. A future
+    # fallback must re-enter independent eligibility and disclosure enforcement.
     if not provider_ready:
         log_json(
             logging.WARNING,
@@ -507,8 +566,9 @@ def _call_ollama(
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = tool_choice
-    with httpx.Client(timeout=timeout_s) as client:
-        resp = client.post(f"{SETTINGS.ollama.base_url}/api/chat", json=payload, headers=headers)
+    base_url = _local_ollama_url()
+    with httpx.Client(timeout=timeout_s, trust_env=False, follow_redirects=False) as client:
+        resp = client.post(f"{base_url}/api/chat", json=payload, headers=headers)
     resp.raise_for_status()
     result = resp.json()
     message = result.get("message", {}) if isinstance(result, dict) else {}
