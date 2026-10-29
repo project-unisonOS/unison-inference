@@ -12,6 +12,8 @@ def payload():
 
 @pytest.fixture
 def controlled_model(monkeypatch):
+    from dataclasses import replace
+    monkeypatch.setattr(server, "SETTINGS", replace(server.SETTINGS, ollama=replace(server.SETTINGS.ollama, base_url="http://127.0.0.1:11434")))
     _, registry = registry_with_local()
     monkeypatch.setattr(server, "_GOVERNED_REGISTRY", registry)
     monkeypatch.setattr(server, "_provider_ready_status", lambda *a: (True, "synthetic"))
@@ -90,6 +92,32 @@ def test_request_hardware_cannot_replace_trusted_inventory(authenticated_inferen
 def test_registry_is_required_even_when_optional_startup_flag_is_false(authenticated_inference, controlled_model, monkeypatch):
     client, headers, _, _ = authenticated_inference
     monkeypatch.setattr(server, "_GOVERNED_REGISTRY", None)
+    response = client.post("/inference/request", json=payload(), headers=headers())
+    assert response.status_code == 503
+    assert controlled_model == []
+
+
+@pytest.mark.parametrize("message", [
+    {"role": "user", "content": "fixture", "images": ["synthetic-image"]},
+    {"role": "user", "content": [{"type": "image_url", "image_url": "synthetic"}]},
+    {"role": "assistant", "content": "fixture", "tool_calls": [{"name": "fixture"}]},
+    {"role": "tool", "content": "fixture"},
+    {"role": "user", "content": "fixture", "audio": {}},
+])
+def test_nested_capabilities_never_reach_provider(authenticated_inference, controlled_model, message):
+    client, headers, _, _ = authenticated_inference
+    response = client.post("/inference/request", json={**payload(), "messages": [message]}, headers=headers())
+    assert response.status_code in (400, 403, 422)
+    assert controlled_model == []
+
+
+@pytest.mark.parametrize("endpoint", ["https://example.com", "http://ollama:11434", "http://localhost:11434",
+                                    "http://127.0.0.1@evil.example", "http://127.0.0.1/path",
+                                    "http://127.0.0.1?target=remote", "http://192.168.1.2:11434"])
+def test_local_authority_cannot_use_nonlocal_or_ambiguous_endpoint(authenticated_inference, controlled_model, monkeypatch, endpoint):
+    from dataclasses import replace
+    monkeypatch.setattr(server, "SETTINGS", replace(server.SETTINGS, ollama=replace(server.SETTINGS.ollama, base_url=endpoint)))
+    client, headers, _, _ = authenticated_inference
     response = client.post("/inference/request", json=payload(), headers=headers())
     assert response.status_code == 503
     assert controlled_model == []

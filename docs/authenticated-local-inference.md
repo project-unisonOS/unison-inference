@@ -27,3 +27,21 @@ No new accounts, real credentials, grants or models have been provisioned.
 Tests mint ephemeral keys only for synthetic local fixtures. Deployment requires
 reviewed auth scope issuance, registry artifacts and trusted hardware inventory;
 this packet does not change any operational configuration.
+
+Review follow-up: messages permit only role and string content; nested images,
+audio, structured content and tool messages are rejected before provider use.
+Local scope requires a literal loopback IP endpoint, disables environment proxies
+and redirects, and rejects ambiguous URL components. Container service names
+are intentionally not treated as proof of locality; a reviewed isolated runtime
+transport is still required for that deployment. Readiness requires an exact
+model name and the selected manifest's artifact digest, rather than prefix match.
+Thirty-two focused synthetic tests pass locally after these changes.
+
+Release blocker: provider-reported digest equality is not independent proof that
+the approved bytes executed. An isolated immutable model runtime must bind the
+verified artifact to execution and prevent model replacement between checking
+and invocation. No real Ollama execution is certified here. Caller integration
+must also supply a governed task requirement and an issuer-issued token with
+inference audience and inference.local scope; the orchestrator must not invent
+that authority or silently downgrade a failed request. Keep this draft unmerged
+until these runtime and integration contracts receive explicit review.

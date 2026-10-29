@@ -4,6 +4,8 @@ import logging
 import json
 import time
 import os
+import ipaddress
+from urllib.parse import urlsplit
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from unison_common.logging import configure_logging, log_json
@@ -62,22 +64,36 @@ def configure_governed_registry(registry: ModelRegistry | None) -> None:
     globals()["_GOVERNED_REGISTRY"] = registry
 
 
-def _provider_ready_status(provider: str, model: Optional[str] = None) -> Tuple[bool, str]:
+def _local_ollama_url() -> str:
+    url = urlsplit(SETTINGS.ollama.base_url)
+    try:
+        local = ipaddress.ip_address(url.hostname or "").is_loopback
+        port = url.port
+    except ValueError:
+        raise ValueError("literal loopback endpoint required") from None
+    if (url.scheme not in {"http", "https"} or not local or url.username or url.password
+            or url.path not in {"", "/"} or url.query or url.fragment or port == 0):
+        raise ValueError("literal loopback endpoint required")
+    return SETTINGS.ollama.base_url.rstrip("/")
+
+
+def _provider_ready_status(provider: str, model: Optional[str] = None, expected_digest: Optional[str] = None) -> Tuple[bool, str]:
     """Lightweight readiness check for configured provider/model."""
     if provider == "ollama":
         try:
             import httpx
-            with httpx.Client(timeout=2.0) as client:
-                r = client.get(f"{SETTINGS.ollama.base_url}/api/tags")
+            base_url = _local_ollama_url()
+            with httpx.Client(timeout=2.0, trust_env=False, follow_redirects=False) as client:
+                r = client.get(f"{base_url}/api/tags")
             if r.status_code != 200:
                 return False, "ollama unreachable"
             tags = r.json().get("models", []) if r.headers.get("content-type", "").startswith("application/json") else []
             if model:
-                models = [m.get("name") for m in tags if isinstance(m, dict)]
-                if model not in models and not any(
-                    str(model).startswith(str(m)) or str(m).startswith(str(model)) for m in models if m
-                ):
+                matching = [m for m in tags if isinstance(m, dict) and m.get("name") == model]
+                if len(matching) != 1:
                     return False, f"model {model} not pulled"
+                if expected_digest is not None and matching[0].get("digest") != expected_digest:
+                    return False, "runtime model digest differs from approved artifact"
             return True, "ok"
         except Exception as exc:
             return False, f"ollama error: {exc}"
@@ -238,12 +254,28 @@ def inference_request(
     principal = get_bound_principal(request)
     if principal.principal_kind != PrincipalKind.PERSON or "inference.local" not in principal.scopes:
         raise HTTPException(status_code=403, detail="Explicit person-scoped local inference authority required")
+    try:
+        _local_ollama_url()
+    except ValueError:
+        raise HTTPException(status_code=503, detail="Local inference requires a literal loopback runtime endpoint") from None
     if not isinstance(body.get("task_requirement"), dict):
         raise HTTPException(status_code=400, detail="A governed task requirement is required")
     if body.get("provider", "ollama") != "ollama":
         raise HTTPException(status_code=403, detail="Remote inference requires independent disclosure authority")
     if body.get("tools") or body.get("attachments"):
         raise HTTPException(status_code=403, detail="Tools and attachments require separately verified capability authority")
+    if "prompt" in body and not isinstance(body["prompt"], str):
+        raise HTTPException(status_code=400, detail="Prompt must be text")
+    if "messages" in body:
+        messages = body["messages"]
+        if not isinstance(messages, list) or not messages:
+            raise HTTPException(status_code=400, detail="Messages must be a nonempty text conversation")
+        for message in messages:
+            if (not isinstance(message, dict)
+                    or set(message) != {"role", "content"}
+                    or message["role"] not in ("system", "user", "assistant")
+                    or not isinstance(message["content"], str)):
+                raise HTTPException(status_code=400, detail="Only role and text content are permitted in messages")
     try:
         token_limit = int(body.get("max_tokens", 1000))
     except (TypeError, ValueError):
@@ -303,7 +335,7 @@ def inference_request(
             model = SETTINGS.on_device_multimodal_model
         else:
             model = SETTINGS.on_device_text_model or SETTINGS.default_model
-    provider_ready, ready_detail = _provider_ready_status(provider, model)
+    provider_ready, ready_detail = _provider_ready_status(provider, model, manifest.artifact_digest)
     fallback_used = False
     # Availability cannot expand the token's local-only authority. A future
     # fallback must re-enter independent eligibility and disclosure enforcement.
@@ -525,8 +557,9 @@ def _call_ollama(
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = tool_choice
-    with httpx.Client(timeout=timeout_s) as client:
-        resp = client.post(f"{SETTINGS.ollama.base_url}/api/chat", json=payload, headers=headers)
+    base_url = _local_ollama_url()
+    with httpx.Client(timeout=timeout_s, trust_env=False, follow_redirects=False) as client:
+        resp = client.post(f"{base_url}/api/chat", json=payload, headers=headers)
     resp.raise_for_status()
     result = resp.json()
     message = result.get("message", {}) if isinstance(result, dict) else {}
